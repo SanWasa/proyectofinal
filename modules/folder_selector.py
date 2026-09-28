@@ -1,89 +1,137 @@
-# vault_manager.py
 import os
+import json
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QPushButton, 
-    QFileDialog, QHBoxLayout, QMessageBox
+    QPushButton, QMenu, QAction, QDialog, QVBoxLayout, QHBoxLayout,
+    QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QLabel, QWidgetAction
 )
-from PyQt5.QtCore import QSettings
+from PyQt5.QtCore import pyqtSignal, Qt
 
-class FolderManager:
-    def __init__(self, app_name="MiAppNotas", org_name="MiProyecto"):
-        self.settings = QSettings(org_name, app_name)
-
-    def get_current_vault(self) -> str:
-        vault = self.settings.value("current_vault", None)
-        if vault and os.path.exists(vault):
-            return vault
-        return None
-
-    def set_vault(self, path: str):
-        
-        if os.path.exists(path):
-            self.settings.setValue("current_vault", path)
-
-    def clear_vault(self):
-        
-        self.settings.remove("current_vault")
-
-class FolderSelectorDialog(QDialog):
-    def __init__(self, parent=None, current_vault=None):
+class VaultManagerDialog(QDialog):
+    """Diálogo secundario para gestionar/añadir carpetas guardadas."""
+    def __init__(self, folders, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Gestor de Bóvedas")
-        self.resize(450, 220)
-        self.setModal(True)
-
-        self.selected_vault = current_vault
-        self.init_ui()
-
-    def init_ui(self):
+        self.folders = folders
+        self.setWindowTitle("Administrar Bóvedas")
+        self.resize(400, 250)
+        
         layout = QVBoxLayout()
-        layout.setSpacing(15)
+        self.list_widget = QListWidget()
+        self.update_list()
+        layout.addWidget(self.list_widget)
 
-        # Título descriptivo
-        lbl_title = QLabel("<h2>Selecciona una Bóveda de Notas</h2>")
-        lbl_title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(lbl_title)
-
-        # Estado actual
-        ruta_texto = self.selected_vault if self.selected_vault else "Ninguna bóveda seleccionada"
-        self.lbl_path = QLabel(f"<b>Ubicación actual:</b><br>{ruta_texto}")
-        self.lbl_path.setWordWrap(True)
-        layout.addWidget(self.lbl_path)
-
-        # Botones de acción
         btn_layout = QHBoxLayout()
+        btn_add = QPushButton("Añadir Nueva Carpeta")
+        btn_add.clicked.connect(self.add_folder)
+        btn_layout.addWidget(btn_add)
 
-        btn_browse = QPushButton("Abrir carpeta existente...")
-        btn_browse.clicked.connect(self.browse_folder)
+        btn_close = QPushButton("Cerrar")
+        btn_close.clicked.connect(self.accept)
+        btn_layout.addWidget(btn_close)
 
-        btn_confirm = QPushButton("Abrir Bóveda")
-        btn_confirm.setStyleSheet("font-weight: bold;")
-        btn_confirm.clicked.connect(self.confirm_selection)
-
-        btn_layout.addWidget(btn_browse)
-        btn_layout.addWidget(btn_confirm)
         layout.addLayout(btn_layout)
-
         self.setLayout(layout)
 
-    def browse_folder(self):
-        dir_inicial = self.selected_vault if self.selected_vault else os.path.expanduser("~")
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Seleccionar Bóveda",
-            dir_inicial
-        )
+    def update_list(self):
+        self.list_widget.clear()
+        for f in self.folders:
+            self.list_widget.addItem(f)
 
-        if folder:
-            self.selected_vault = folder
-            self.lbl_path.setText(f"<b>Ubicación actual:</b><br>{self.selected_vault}")
+    def add_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "Seleccionar Carpeta para Bóveda")
+        if path and path not in self.folders:
+            self.folders.append(path)
+            self.update_list()
 
-    def confirm_selection(self):
-        if self.selected_vault and os.path.exists(self.selected_vault):
-            self.accept()
+
+class VaultSelectorButton(QPushButton):
+    """Botón con menú desplegable que simula el selector de bóvedas."""
+    vault_changed = pyqtSignal(str)
+
+    def __init__(self, config_file="vaults.json", parent=None):
+        super().__init__(parent)
+        self.setObjectName("vaultButton")
+        self.config_file = config_file
+        self.folders = []
+        self.current_folder = ""
+
+        # Cargar carpetas persistentes
+        self.load_folders()
+
+        # Configurar menú desplegable
+        self.menu_vaults = QMenu(self)
+        self.setMenu(self.menu_vaults)
+
+        # Aplicar hojas de estilo QSS
+        #self.setStyleSheet(DARK_THEME_STYLE)
+
+        # Renderizar opciones del menú
+        self.rebuild_menu()
+
+    def load_folders(self):
+        """Carga las rutas guardadas desde el archivo JSON."""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    self.folders = json.load(f)
+            except Exception:
+                self.folders = []
+        
+        if self.folders and not self.current_folder:
+            self.current_folder = self.folders[0]
+
+    def save_folders(self):
+        """Guarda la lista de carpetas en el archivo JSON."""
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(self.folders, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"Error al guardar carpetas: {e}")
+
+    def rebuild_menu(self):
+        """Reconstruye dinámicamente las opciones del menú desplegable."""
+        self.menu_vaults.clear()
+
+        if self.current_folder:
+            display_name = os.path.basename(self.current_folder) or self.current_folder
+            self.setText(f"  {display_name}   ▾")
         else:
-            QMessageBox.warning(
-                self, 
-                "Error", 
-                "Por favor selecciona una carpeta válida antes de continuar."
-            )
+            self.setText("  Seleccionar Bóveda   ▾")
+
+        # Agregar carpetas registradas al menú
+        for folder in self.folders:
+            folder_name = os.path.basename(folder) or folder
+            
+            # Añadir indicador visual (✓) a la opción actualmente activa
+            if folder == self.current_folder:
+                action_text = f"{folder_name}   ✓"
+            else:
+                action_text = folder_name
+
+            action = QAction(action_text, self)
+            action.triggered.connect(lambda checked, f=folder: self.select_vault(f))
+            self.menu_vaults.addAction(action)
+
+        # Separador horizontal como en la imagen
+        self.menu_vaults.addSeparator()
+
+        # Opción final: Administrar bóvedas / Añadir carpetas
+        manage_action = QAction("📁  Administrar bóvedas...", self)
+        manage_action.triggered.connect(self.open_manager)
+        self.menu_vaults.addAction(manage_action)
+
+    def select_vault(self, folder_path):
+        """Cambia la carpeta seleccionada y emite la señal."""
+        self.current_folder = folder_path
+        self.rebuild_menu()
+        self.vault_changed.emit(self.current_folder)
+
+    def open_manager(self):
+        """Abre el diálogo para administrar o añadir más carpetas."""
+        dialog = VaultManagerDialog(self.folders, parent=self)
+        if dialog.exec_():
+            self.folders = dialog.folders
+            self.save_folders()
+            # Si no había ninguna seleccionada, selecciona la primera
+            if self.folders and self.current_folder not in self.folders:
+                self.current_folder = self.folders[0]
+            self.rebuild_menu()
