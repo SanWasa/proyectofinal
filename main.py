@@ -12,7 +12,7 @@ from PyQt5.QtCore import Qt, QDateTime, QThread, pyqtSignal, QTimer
 
 # Importaciones de módulos locales
 from modules.folder_selector import VaultSelectorButton
-from pestanas import ContenedorPestanas
+from modules.pestanas import ContenedorPestanas
 
 # Módulo de Markdown integrado en tiempo real (md_2.py)
 try:
@@ -120,6 +120,20 @@ class GestorGmail:
             except Exception:
                 pass
         return self.correo_usuario_actual
+
+
+    def cerrar_sesion(self):
+            """Elimina el archivo token.json para cerrar la sesión activa."""
+            self.credenciales = None
+            self.correo_usuario_actual = ""
+            if os.path.exists('token.json'):
+                try:
+                    os.remove('token.json')
+                    return True
+                except Exception as e:
+                    raise Exception(f"No se pudo eliminar el token de sesión: {e}")
+            return True
+
 
     def enviar_correo_directo_gmail(self, correo_destino, titulo_nota, contenido_nota, fecha_qdatetime):
         credenciales = self.obtener_credenciales()
@@ -306,17 +320,23 @@ class VentanaPrincipalProyecto(QMainWindow):
         # --- PANEL DERECHO (Barra Superior + Splitter con Paneles Independientes) ---
         layout_controles = QHBoxLayout()
         self.boton_login_google = QPushButton("Iniciar Sesión Google")
+        self.boton_logout_google = QPushButton("Cerrar Sesión")
+        self.boton_guardar = QPushButton("Guardar Nota")
         self.boton_agendar = QPushButton("Agendar Recordatorio")
         self.boton_borrar = QPushButton("Borrar Nota")
         self.boton_dividir = QPushButton("Vista Dividida")
 
         self.boton_login_google.clicked.connect(self.iniciar_flujo_login)
+        self.boton_logout_google.clicked.connect(self.cerrar_sesion_google)
+        self.boton_guardar.clicked.connect(self.guardar_archivo)
         self.boton_agendar.clicked.connect(self.agendar_recordatorio_correo)
         self.boton_borrar.clicked.connect(self.borrar_archivo)
         self.boton_dividir.clicked.connect(self.alternar_vista_dividida)
 
         layout_controles.addWidget(self.boton_login_google)
+        layout_controles.addWidget(self.boton_logout_google)
         layout_controles.addWidget(self.boton_agendar)
+        layout_controles.addWidget(self.boton_guardar)
         layout_controles.addWidget(self.boton_borrar)
         layout_controles.addWidget(self.boton_dividir)
         layout_controles.addStretch()
@@ -377,6 +397,13 @@ class VentanaPrincipalProyecto(QMainWindow):
             self.panel_secundario.show()
             if self.panel_secundario.contenedor_pestanas.count() == 0:
                 self.crear_nueva_nota_pestana(contenedor=self.panel_secundario.contenedor_pestanas)
+
+    def cerrar_sesion_google(self):
+        try:
+            self.gestor_gmail.cerrar_sesion()
+            QMessageBox.information(self, "Sesión Cerrada", "Has cerrado sesión correctamente.")
+        except Exception as error:
+            QMessageBox.warning(self, "Error al cerrar sesión", str(error))
 
     def on_vault_changed(self, new_path):
         """Maneja cambios de carpeta en el panel principal."""
@@ -495,6 +522,7 @@ class VentanaPrincipalProyecto(QMainWindow):
         except Exception as e:
             print(f"Error en auto-guardado: {e}")
 
+
     def agendar_recordatorio_correo(self):
         """Programa el envío del correo para la nota activa."""
         editor_actual = self.obtener_editor_activo()
@@ -532,6 +560,73 @@ class VentanaPrincipalProyecto(QMainWindow):
                 )
             except Exception as error_google:
                 QMessageBox.warning(self, "Error de Google", str(error_google))
+
+
+    def guardar_archivo(self):
+        pestana_actual = self.obtener_editor_activo()
+        if not pestana_actual:
+            return
+
+        if not pestana_actual.ruta_archivo:
+            ruta_archivo, _ = QFileDialog.getSaveFileName(
+                self, "Guardar archivo Markdown", "", "Archivos Markdown (*.md);;Todos los archivos (*)"
+            )
+            if not ruta_archivo:
+                return
+            
+            if not ruta_archivo.endswith(".md"):
+                ruta_archivo += ".md"
+            pestana_actual.ruta_archivo = ruta_archivo
+
+        try:
+            contenido = pestana_actual.editor_texto.toPlainText()
+            with open(pestana_actual.ruta_archivo, "w", encoding="utf-8") as archivo_escritura:
+                archivo_escritura.write(contenido)
+
+            nombre_solo = os.path.basename(pestana_actual.ruta_archivo)
+            contenedor_activo = self.obtener_contenedor_activo()
+            contenedor_activo.setTabText(contenedor_activo.currentIndex(), nombre_solo)
+
+            correo_sugerido = self.gestor_gmail.obtener_correo_sesion()
+            dialogo_agenda = DialogoAgendarNota(self, nombre_solo, correo_por_defecto=correo_sugerido)
+            
+            if dialogo_agenda.exec_() == QDialog.Accepted:
+                correo_destino, qdate_seleccionada = dialogo_agenda.obtener_datos()
+
+                try:
+                    milisegundos_diferencia = QDateTime.currentDateTime().msecsTo(qdate_seleccionada)
+
+                    if milisegundos_diferencia > 0:
+                        timer_envio = QTimer(self)
+                        timer_envio.setSingleShot(True)
+                        timer_envio.timeout.connect(
+                            lambda: self.gestor_gmail.enviar_correo_directo_gmail(
+                                correo_destino=correo_destino,
+                                titulo_nota=nombre_solo,
+                                contenido_nota=contenido,
+                                fecha_qdatetime=qdate_seleccionada
+                            )
+                        )
+                        timer_envio.start(milisegundos_diferencia)
+                        self.temporizadores_correo.append(timer_envio)
+
+                    fecha_formateada = qdate_seleccionada.toString("dd/MM/yyyy hh:mm AP")
+                    QMessageBox.information(
+                        self, 
+                        "Envío Programado", 
+                        f"¡Éxito! El correo se enviará automáticamente el {fecha_formateada} a '{correo_destino}'."
+                    )
+                except Exception as error_google:
+                    QMessageBox.warning(
+                        self, 
+                        "Guardado con Advertencia", 
+                        f"El archivo se guardó localmente, pero ocurrió un error con la cuenta de Google:\n{error_google}"
+                    )
+            else:
+                QMessageBox.information(self, "Guardado", "El archivo .md se guardó sin agendar fecha.")
+
+        except Exception as error:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar el archivo: {error}")
 
     def borrar_archivo(self):
         """Elimina el archivo Markdown activo."""
