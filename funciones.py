@@ -1,3 +1,6 @@
+from PyQt5.QtWidgets import QMessageBox, QFileDialog
+import os
+
 def abrir_archivo(self):
         """Abre y permite revisar archivos en formato .md"""
         ruta_archivo, _ = QFileDialog.getOpenFileName(
