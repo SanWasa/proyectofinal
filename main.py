@@ -661,7 +661,7 @@ class VentanaPrincipalProyecto(QMainWindow):
             QMessageBox.information(self, "Google", mensaje)
         else:
             QMessageBox.critical(self, "Error de Sesión", mensaje)
-
+print("Hola a todos esto es nada mas para probar cosas")
 
 if __name__ == "__main__":
     aplicacion = QApplication(sys.argv)
